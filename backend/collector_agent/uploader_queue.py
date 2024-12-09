@@ -17,16 +17,17 @@ def enqueue_metrics():
     while True:
         metrics = collect_metrics()
         metric_queue.put(metrics)
-        time.sleep(5)
+        time.sleep(3)
 
 def upload_metrics():
     while True:
         if not metric_queue.empty():
             metrics = metric_queue.get()
             try:
+                print("Uploading metrics:", metrics)  # Debugging
                 response = requests.post("http://localhost:5000/api/metrics", json=metrics)
-                if response.status_code == 200:
-                    print("Metrics uploaded:", metrics)
+                print("Response status:", response.status_code)
+                print("Response text:", response.text)
             except Exception as e:
                 print("Failed to upload metrics:", e)
 

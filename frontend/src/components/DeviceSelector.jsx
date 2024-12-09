@@ -13,8 +13,8 @@ export default function DeviceSelector({ devices, selectedDevice, onSelect }) {
         className="mt-2 w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
       >
         {devices.map((device) => (
-          <option key={device} value={device}>
-            {device}
+          <option key={device.id} value={device.id}>
+            {device.name}
           </option>
         ))}
       </select>
