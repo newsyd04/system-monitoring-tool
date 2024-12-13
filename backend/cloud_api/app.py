@@ -27,10 +27,6 @@ def save_metrics():
     """Save metrics and emit updates to connected clients."""
     data = request.json
     device_id = data["device_id"]
-    cpu_usage = data["cpu_usage"]
-    memory_usage = data["memory_usage"]
-    running_threads = data["running_threads"]
-
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
 
@@ -47,26 +43,25 @@ def save_metrics():
     """, (device_id,))
     metric_snapshot_id = cursor.lastrowid
 
-    # Insert metric values
-    cursor.execute("""
-        INSERT INTO metric_values (metric_snapshot_id, device_metric_type_id, value)
-        VALUES (?, 1, ?)
-    """, (metric_snapshot_id, cpu_usage))
-    cursor.execute("""
-        INSERT INTO metric_values (metric_snapshot_id, device_metric_type_id, value)
-        VALUES (?, 2, ?)
-    """, (metric_snapshot_id, memory_usage))
-    cursor.execute("""
-        INSERT INTO metric_values (metric_snapshot_id, device_metric_type_id, value)
-        VALUES (?, 3, ?)
-    """, (metric_snapshot_id, running_threads))
+    # Insert all metric values dynamically
+    metric_types = {
+        "cpu_usage": 1,
+        "memory_usage": 2,
+        "running_threads": 3,
+    }
+
+    for metric_key, metric_id in metric_types.items():
+        if metric_key in data:
+            cursor.execute("""
+                INSERT INTO metric_values (metric_snapshot_id, device_metric_type_id, value)
+                VALUES (?, ?, ?)
+            """, (metric_snapshot_id, metric_id, data[metric_key]))
 
     conn.commit()
     conn.close()
 
     # Emit the new metric to connected clients
     socketio.emit('new_metric', data)
-
     return jsonify({"status": "success"}), 200
 
 @app.route("/api/metrics", methods=["GET"])
@@ -105,4 +100,4 @@ def get_metrics():
 if __name__ == "__main__":
     from database import init_db
     init_db()
-    socketio.run(app, host="0.0.0.0", port=5000)
+    socketio.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))

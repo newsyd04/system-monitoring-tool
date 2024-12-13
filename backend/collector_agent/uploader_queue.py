@@ -17,7 +17,7 @@ def enqueue_metrics():
     while True:
         metrics = collect_metrics()
         metric_queue.put(metrics)
-        time.sleep(3)
+        time.sleep(5)
 
 def upload_metrics():
     while True:
