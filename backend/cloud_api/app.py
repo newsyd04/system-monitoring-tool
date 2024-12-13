@@ -4,6 +4,7 @@ import sqlite3
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_socketio import SocketIO
+import eventlet
 
 DB_FILE = "metrics.db"
 
@@ -100,4 +101,4 @@ def get_metrics():
 if __name__ == "__main__":
     from database import init_db
     init_db()
-    socketio.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    socketio.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), allow_unsafe_werkzeug=True)
