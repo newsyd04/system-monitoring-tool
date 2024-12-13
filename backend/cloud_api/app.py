@@ -32,26 +32,33 @@ def get_devices():
 
 @app.route("/api/metrics", methods=["GET"])
 def get_metrics():
-    """Fetch metrics for a specific device."""
+    """Fetch the most recent metrics for a specific device."""
     device_id = request.args.get("device_id")
     if not device_id:
         return jsonify({"error": "Missing required parameter: device_id"}), 400
 
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
+
+    # Query to get the most recent metric value for each type
     query = """
-        SELECT dmt.name, mv.value
-        FROM metric_snapshots ms
-        JOIN metric_values mv ON ms.metric_snapshot_id = mv.metric_snapshot_id
+        SELECT dmt.name AS metric_name, mv.value
+        FROM metric_values mv
+        JOIN metric_snapshots ms ON mv.metric_snapshot_id = ms.metric_snapshot_id
         JOIN device_metric_types dmt ON mv.device_metric_type_id = dmt.device_metric_type_id
         WHERE ms.device_id = ?
-        ORDER BY ms.client_timestamp_utc DESC
-        LIMIT 5
+        AND ms.client_timestamp_utc = (
+            SELECT MAX(ms2.client_timestamp_utc)
+            FROM metric_snapshots ms2
+            WHERE ms2.device_id = ms.device_id
+        )
+        GROUP BY dmt.name
     """
     cursor.execute(query, (device_id,))
     rows = cursor.fetchall()
     conn.close()
 
+    # Format the response
     metrics = [{"metric_name": row[0], "value": row[1]} for row in rows]
     return jsonify(metrics)
 
