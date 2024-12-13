@@ -40,19 +40,18 @@ def get_metrics():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
 
-    # Query to get the most recent metric value for each type
+    # Use a subquery to get the latest snapshot for each metric type
     query = """
         SELECT dmt.name AS metric_name, mv.value
         FROM metric_values mv
-        JOIN metric_snapshots ms ON mv.metric_snapshot_id = ms.metric_snapshot_id
+        JOIN (
+            SELECT ms.metric_snapshot_id, ms.device_id
+            FROM metric_snapshots ms
+            WHERE ms.device_id = ?
+            ORDER BY ms.client_timestamp_utc DESC
+            LIMIT 1
+        ) latest_snapshot ON mv.metric_snapshot_id = latest_snapshot.metric_snapshot_id
         JOIN device_metric_types dmt ON mv.device_metric_type_id = dmt.device_metric_type_id
-        WHERE ms.device_id = ?
-        AND ms.client_timestamp_utc = (
-            SELECT MAX(ms2.client_timestamp_utc)
-            FROM metric_snapshots ms2
-            WHERE ms2.device_id = ms.device_id
-        )
-        GROUP BY dmt.name
     """
     cursor.execute(query, (device_id,))
     rows = cursor.fetchall()
