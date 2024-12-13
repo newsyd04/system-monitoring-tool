@@ -114,21 +114,32 @@ def get_metrics_history():
 
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
+
+    # Query to group metrics by timestamp
     query = """
-        SELECT ms.client_timestamp_utc, d.device_id, d.name, mv.value, dmt.name AS metric_name
+        SELECT ms.client_timestamp_utc,
+               MAX(CASE WHEN dmt.name = 'CPU Usage' THEN mv.value ELSE NULL END) AS cpu_usage,
+               MAX(CASE WHEN dmt.name = 'Memory Usage' THEN mv.value ELSE NULL END) AS memory_usage,
+               MAX(CASE WHEN dmt.name = 'Running Threads' THEN mv.value ELSE NULL END) AS running_threads
         FROM metric_snapshots ms
-        JOIN devices d ON ms.device_id = d.device_id
         JOIN metric_values mv ON ms.metric_snapshot_id = mv.metric_snapshot_id
         JOIN device_metric_types dmt ON mv.device_metric_type_id = dmt.device_metric_type_id
-        WHERE d.device_id = ?
+        WHERE ms.device_id = ?
+        GROUP BY ms.client_timestamp_utc
         ORDER BY ms.client_timestamp_utc DESC
     """
     cursor.execute(query, (device_id,))
     rows = cursor.fetchall()
     conn.close()
 
+    # Format the response
     history = [
-        {"timestamp": row[0], "device_id": row[1], "device_name": row[2], "metric": row[4], "value": row[3]}
+        {
+            "timestamp": row[0],
+            "cpu_usage": row[1] if row[1] is not None else "N/A",
+            "memory_usage": row[2] if row[2] is not None else "N/A",
+            "running_threads": row[3] if row[3] is not None else "N/A",
+        }
         for row in rows
     ]
     return jsonify(history)
