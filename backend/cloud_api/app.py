@@ -30,6 +30,31 @@ def get_devices():
     conn.close()
     return jsonify(devices)
 
+@app.route("/api/metrics", methods=["GET"])
+def get_metrics():
+    """Fetch metrics for a specific device."""
+    device_id = request.args.get("device_id")
+    if not device_id:
+        return jsonify({"error": "Missing required parameter: device_id"}), 400
+
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    query = """
+        SELECT dmt.name, mv.value
+        FROM metric_snapshots ms
+        JOIN metric_values mv ON ms.metric_snapshot_id = mv.metric_snapshot_id
+        JOIN device_metric_types dmt ON mv.device_metric_type_id = dmt.device_metric_type_id
+        WHERE ms.device_id = ?
+        ORDER BY ms.client_timestamp_utc DESC
+        LIMIT 5
+    """
+    cursor.execute(query, (device_id,))
+    rows = cursor.fetchall()
+    conn.close()
+
+    metrics = [{"metric_name": row[0], "value": row[1]} for row in rows]
+    return jsonify(metrics)
+
 
 @app.route("/api/metrics", methods=["POST"])
 def save_metrics():
