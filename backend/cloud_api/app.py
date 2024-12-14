@@ -1,21 +1,25 @@
-import sys
 import os
-import sqlite3
+import psycopg2
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_socketio import SocketIO
-import eventlet
 
-DB_FILE = "metrics.db"
+DATABASE_URL = "postgresql://metricsdb_yqja_user:entPz514UvRf9JX3KneevRRy2xpktl9v@dpg-ctf0alt2ng1s738fois0-a/metricsdb_yqja"
 
 app = Flask(__name__)
 CORS(app)
 socketio = SocketIO(app, cors_allowed_origins="*")
 
+
+def get_db_connection():
+    """Establish a connection to the PostgreSQL database."""
+    return psycopg2.connect(DATABASE_URL)
+
+
 @app.route("/api/devices", methods=["GET"])
 def get_devices():
     """Fetch all unique devices with their aggregators."""
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     cursor = conn.cursor()
     query = """
         SELECT d.device_id, d.name, a.name AS aggregator_name
@@ -30,6 +34,7 @@ def get_devices():
     conn.close()
     return jsonify(devices)
 
+
 @app.route("/api/metrics", methods=["GET"])
 def get_metrics():
     """Fetch the most recent metrics for a specific device."""
@@ -37,17 +42,15 @@ def get_metrics():
     if not device_id:
         return jsonify({"error": "Missing required parameter: device_id"}), 400
 
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     cursor = conn.cursor()
-
-    # Use a subquery to get the latest snapshot for each metric type
     query = """
         SELECT dmt.name AS metric_name, mv.value
         FROM metric_values mv
         JOIN (
-            SELECT ms.metric_snapshot_id, ms.device_id
+            SELECT ms.metric_snapshot_id
             FROM metric_snapshots ms
-            WHERE ms.device_id = ?
+            WHERE ms.device_id = %s
             ORDER BY ms.client_timestamp_utc DESC
             LIMIT 1
         ) latest_snapshot ON mv.metric_snapshot_id = latest_snapshot.metric_snapshot_id
@@ -57,7 +60,6 @@ def get_metrics():
     rows = cursor.fetchall()
     conn.close()
 
-    # Format the response
     metrics = [{"metric_name": row[0], "value": row[1]} for row in rows]
     return jsonify(metrics)
 
@@ -67,21 +69,24 @@ def save_metrics():
     """Save metrics and emit updates to connected clients."""
     data = request.json
     device_id = data["device_id"]
-    conn = sqlite3.connect(DB_FILE)
+
+    conn = get_db_connection()
     cursor = conn.cursor()
 
     # Ensure the device exists
     cursor.execute("""
-        INSERT OR IGNORE INTO devices (device_id, aggregator_id, name, ordinal)
-        VALUES (?, 1, ?, 0)
+        INSERT INTO devices (device_id, aggregator_id, name, ordinal)
+        VALUES (%s, 1, %s, 0)
+        ON CONFLICT (device_id) DO NOTHING
     """, (device_id, device_id))
 
     # Insert metric snapshot
     cursor.execute("""
         INSERT INTO metric_snapshots (device_id, client_timestamp_utc, client_timezone_mins)
-        VALUES (?, datetime('now'), 0)
+        VALUES (%s, CURRENT_TIMESTAMP, 0)
+        RETURNING metric_snapshot_id
     """, (device_id,))
-    metric_snapshot_id = cursor.lastrowid
+    metric_snapshot_id = cursor.fetchone()[0]
 
     # Insert all metric values dynamically
     metric_types = {
@@ -94,13 +99,12 @@ def save_metrics():
         if metric_key in data:
             cursor.execute("""
                 INSERT INTO metric_values (metric_snapshot_id, device_metric_type_id, value)
-                VALUES (?, ?, ?)
+                VALUES (%s, %s, %s)
             """, (metric_snapshot_id, metric_id, data[metric_key]))
 
     conn.commit()
     conn.close()
 
-    # Emit the new metric to connected clients
     socketio.emit('new_metric', data)
     return jsonify({"status": "success"}), 200
 
@@ -112,10 +116,8 @@ def get_metrics_history():
     if not device_id:
         return jsonify({"error": "Missing required parameter: device_id"}), 400
 
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     cursor = conn.cursor()
-
-    # Query to group metrics by timestamp
     query = """
         SELECT ms.client_timestamp_utc,
                MAX(CASE WHEN dmt.name = 'CPU Usage' THEN mv.value ELSE NULL END) AS cpu_usage,
@@ -124,7 +126,7 @@ def get_metrics_history():
         FROM metric_snapshots ms
         JOIN metric_values mv ON ms.metric_snapshot_id = mv.metric_snapshot_id
         JOIN device_metric_types dmt ON mv.device_metric_type_id = dmt.device_metric_type_id
-        WHERE ms.device_id = ?
+        WHERE ms.device_id = %s
         GROUP BY ms.client_timestamp_utc
         ORDER BY ms.client_timestamp_utc DESC
     """
@@ -132,7 +134,6 @@ def get_metrics_history():
     rows = cursor.fetchall()
     conn.close()
 
-    # Format the response
     history = [
         {
             "timestamp": row[0],
@@ -144,6 +145,7 @@ def get_metrics_history():
     ]
     return jsonify(history)
 
+
 @app.route("/api/device/reboot", methods=["POST"])
 def reboot_device():
     """Handle device reboot commands."""
@@ -151,7 +153,6 @@ def reboot_device():
     if not device_id:
         return jsonify({"error": "Device ID is required"}), 400
 
-    # Emit a socket event to the device
     socketio.emit("reboot_command", {"device_id": device_id})
     return jsonify({"status": "success", "message": f"Reboot command sent to device {device_id}"}), 200
 
@@ -159,4 +160,4 @@ def reboot_device():
 if __name__ == "__main__":
     from database import init_db
     init_db()
-    socketio.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), allow_unsafe_werkzeug=True)
+    socketio.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
