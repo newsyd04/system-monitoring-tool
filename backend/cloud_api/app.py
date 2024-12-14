@@ -133,32 +133,38 @@ def get_metrics_history():
 
     conn = get_db_connection()
     cursor = conn.cursor()
+
+    # Updated query
     query = """
         SELECT ms.client_timestamp_utc,
-               MAX(CASE WHEN dmt.name = 'CPU Usage' THEN mv.value ELSE NULL END) AS cpu_usage,
-               MAX(CASE WHEN dmt.name = 'Memory Usage' THEN mv.value ELSE NULL END) AS memory_usage,
-               MAX(CASE WHEN dmt.name = 'Running Threads' THEN mv.value ELSE NULL END) AS running_threads
+               mv.value AS metric_value,
+               dmt.name AS metric_name
         FROM metric_snapshots ms
         JOIN metric_values mv ON ms.metric_snapshot_id = mv.metric_snapshot_id
         JOIN device_metric_types dmt ON mv.device_metric_type_id = dmt.device_metric_type_id
         WHERE ms.device_id = %s
-        GROUP BY ms.client_timestamp_utc
-        ORDER BY ms.client_timestamp_utc DESC
+        ORDER BY ms.client_timestamp_utc DESC;
     """
     cursor.execute(query, (device_id,))
     rows = cursor.fetchall()
     conn.close()
 
-    history = [
-        {
-            "timestamp": row[0],
-            "cpu_usage": row[1] if row[1] is not None else "N/A",
-            "memory_usage": row[2] if row[2] is not None else "N/A",
-            "running_threads": row[3] if row[3] is not None else "N/A",
-        }
-        for row in rows
-    ]
-    return jsonify(history)
+    # Transform rows into the desired structure
+    history = {}
+    for row in rows:
+        timestamp, metric_value, metric_name = row
+        if timestamp not in history:
+            history[timestamp] = {
+                "timestamp": timestamp,
+                "cpu_usage": "N/A",
+                "memory_usage": "N/A",
+                "running_threads": "N/A",
+            }
+        history[timestamp][metric_name] = metric_value
+
+    # Convert dict to a list of dictionaries
+    result = list(history.values())
+    return jsonify(result)
 
 
 @app.route("/api/device/reboot", methods=["POST"])
