@@ -67,47 +67,62 @@ def get_metrics():
 @app.route("/api/metrics", methods=["POST"])
 def save_metrics():
     """Save metrics and emit updates to connected clients."""
-    data = request.json
-    device_id = data["device_id"]
+    try:
+        data = request.json
+        device_id = data["device_id"]
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
+        conn = get_db_connection()
+        cursor = conn.cursor()
 
-    # Ensure the device exists
-    cursor.execute("""
-        INSERT INTO devices (device_id, aggregator_id, name, ordinal)
-        VALUES (%s, 1, %s, 0)
-        ON CONFLICT (device_id) DO NOTHING
-    """, (device_id, device_id))
+        # Ensure the aggregator exists
+        cursor.execute("""
+            INSERT INTO aggregators (aggregator_id, guid, name)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (aggregator_id) DO NOTHING
+        """, (1, "default-guid", "Default Aggregator"))
 
-    # Insert metric snapshot
-    cursor.execute("""
-        INSERT INTO metric_snapshots (device_id, client_timestamp_utc, client_timezone_mins)
-        VALUES (%s, CURRENT_TIMESTAMP, 0)
-        RETURNING metric_snapshot_id
-    """, (device_id,))
-    metric_snapshot_id = cursor.fetchone()[0]
+        # Ensure the device exists
+        cursor.execute("""
+            INSERT INTO devices (device_id, aggregator_id, name, ordinal)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (device_id) DO NOTHING
+        """, (device_id, 1, device_id, 0))
 
-    # Insert all metric values dynamically
-    metric_types = {
-        "cpu_usage": 1,
-        "memory_usage": 2,
-        "running_threads": 3,
-    }
+        # Insert metric snapshot
+        cursor.execute("""
+            INSERT INTO metric_snapshots (device_id, client_timestamp_utc, client_timezone_mins)
+            VALUES (%s, NOW(), 0)
+            RETURNING metric_snapshot_id
+        """, (device_id,))
+        metric_snapshot_id = cursor.fetchone()[0]
 
-    for metric_key, metric_id in metric_types.items():
-        if metric_key in data:
-            cursor.execute("""
-                INSERT INTO metric_values (metric_snapshot_id, device_metric_type_id, value)
-                VALUES (%s, %s, %s)
-            """, (metric_snapshot_id, metric_id, data[metric_key]))
+        # Insert all metric values dynamically
+        cursor.execute("SELECT * FROM device_metric_types;")
+        print("Device Metric Types in DB:", cursor.fetchall())  # Debugging
 
-    conn.commit()
-    conn.close()
+        metric_types = {
+            "cpu_usage": 1,
+            "memory_usage": 2,
+            "running_threads": 3,
+        }
 
-    socketio.emit('new_metric', data)
-    return jsonify({"status": "success"}), 200
+        for metric_key, metric_id in metric_types.items():
+            if metric_key in data:
+                cursor.execute("""
+                    INSERT INTO metric_values (metric_snapshot_id, device_metric_type_id, value)
+                    VALUES (%s, %s, %s)
+                """, (metric_snapshot_id, metric_id, data[metric_key]))
 
+        conn.commit()
+        conn.close()
+
+        # Emit the new metric to connected clients
+        socketio.emit('new_metric', data)
+        return jsonify({"status": "success"}), 200
+
+    except Exception as e:
+        print("Error in save_metrics:", str(e))
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/api/metrics/history", methods=["GET"])
 def get_metrics_history():
