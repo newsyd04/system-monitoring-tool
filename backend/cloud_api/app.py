@@ -168,14 +168,15 @@ def get_metrics_history():
 
 
 @app.route("/api/device/reboot", methods=["POST"])
-def reboot_device():
-    """Handle device reboot commands."""
+def send_test_message():
+    """Send a test message to the ESP32."""
     device_id = request.json.get("device_id")
     if not device_id:
         return jsonify({"error": "Device ID is required"}), 400
 
-    socketio.emit("reboot_command", {"device_id": device_id})
-    return jsonify({"status": "success", "message": f"Reboot command sent to device {device_id}"}), 200
+    # Emit test_message instead of reboot_command
+    socketio.emit("test_message", {"device_id": device_id})
+    return jsonify({"status": "success", "message": f"Test message sent to device {device_id}"}), 200
 
 
 if __name__ == "__main__":
