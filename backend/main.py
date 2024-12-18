@@ -4,7 +4,7 @@ eventlet.monkey_patch()  # This must be at the very top
 import sys
 import logging
 import threading
-import os  # Fix missing import
+import os
 from flask_socketio import SocketIO
 from cloud_api.app import app, socketio
 from collector_agent.uploader_queue import enqueue_metrics, upload_metrics, shutdown_flag
