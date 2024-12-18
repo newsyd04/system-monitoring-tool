@@ -85,19 +85,31 @@ def save_metrics():
         """, (device_id,))
         metric_snapshot_id = cursor.fetchone()[0]
 
-        # Insert all metric values dynamically
-        metric_types = {
-            "cpu_usage": 1,
-            "memory_usage": 2,
-            "running_threads": 3,
-        }
+        # Process each metric in the request
+        for metric_name, metric_value in data.items():
+            if metric_name in ["device_id", "client_timestamp_utc", "client_timezone_mins"]:
+                continue  # Skip non-metric fields
 
-        for metric_key, metric_id in metric_types.items():
-            if metric_key in data:
+            # Check if the metric type exists in the database
+            cursor.execute("SELECT device_metric_type_id FROM device_metric_types WHERE name = %s", (metric_name,))
+            result = cursor.fetchone()
+
+            if not result:
+                # Insert new metric type if it doesn't exist
                 cursor.execute("""
-                    INSERT INTO metric_values (metric_snapshot_id, device_metric_type_id, value)
-                    VALUES (%s, %s, %s)
-                """, (metric_snapshot_id, metric_id, data[metric_key]))
+                    INSERT INTO device_metric_types (name)
+                    VALUES (%s)
+                    RETURNING device_metric_type_id
+                """, (metric_name,))
+                metric_type_id = cursor.fetchone()[0]
+            else:
+                metric_type_id = result[0]
+
+            # Insert the metric value
+            cursor.execute("""
+                INSERT INTO metric_values (metric_snapshot_id, device_metric_type_id, value)
+                VALUES (%s, %s, %s)
+            """, (metric_snapshot_id, metric_type_id, metric_value))
 
         conn.commit()
         conn.close()
@@ -107,6 +119,7 @@ def save_metrics():
         return jsonify({"status": "success"}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 @app.route("/api/metrics/history", methods=["GET"])
 def get_metrics_history():
