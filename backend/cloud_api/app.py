@@ -16,12 +16,34 @@ def get_db_connection():
     """Establish a connection to the PostgreSQL database."""
     return psycopg2.connect(DATABASE_URL)
 
-@app.route("/api/devices", methods=["GET"])
-def get_devices():
+@app.route("/api/metrics", methods=["GET"])
+def get_metrics():
+    device_id = request.args.get("device_id")
+    if not device_id:
+        return jsonify({"error": "Missing required parameter: device_id"}), 400  # Explicit error
+
     session = SessionLocal()
-    devices = session.query(Device).all()
-    session.close()
-    return jsonify([{"device_id": d.device_id, "name": d.name} for d in devices])
+    try:
+        snapshots = (
+            session.query(MetricValue)
+            .join(MetricSnapshot)
+            .join(MetricType)
+            .filter(MetricSnapshot.device_id == device_id)
+        ).all()
+
+        if not snapshots:  # No data found
+            return jsonify({"error": "No metrics found for the specified device_id"}), 404
+
+        # Process and return the data
+        metrics = [
+            {"metric_name": snapshot.type.name, "value": snapshot.value}
+            for snapshot in snapshots
+        ]
+        return jsonify(metrics), 200
+    except SQLAlchemyError as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        session.close()
 
 @app.route("/api/metrics", methods=["GET"])
 def get_metrics():
