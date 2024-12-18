@@ -36,7 +36,9 @@ class Application:
         self.threads = start_background_threads()
 
     def run(self):
-        """Main application logic: start the WebSocket server."""
+        """
+        Main application logic: start the WebSocket server.
+        """
         try:
             logger.info("Starting WebSocket server...")
             socketio.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
