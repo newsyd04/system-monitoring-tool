@@ -2,13 +2,18 @@ import queue
 import threading
 import time
 import requests
+import os
 from collector_agent.collector import collect_metrics
+from cloud_api.app import app  # Import app for context
 
 # Create a queue with a maximum size to prevent memory overflow
 metric_queue = queue.Queue(maxsize=100)
 
 # Event flag to signal shutdown
 shutdown_flag = threading.Event()
+
+# Use Render's assigned URL or default to localhost for local testing
+BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:5000/api/metrics")
 
 def enqueue_metrics():
     """Collect metrics and add them to the queue."""
@@ -24,9 +29,10 @@ def enqueue_metrics():
 def upload_metric(metric):
     """Upload a single metric."""
     try:
-        response = requests.post("http://localhost:5000/api/metrics", json=metric)
-        response.raise_for_status()
-        print("Metric uploaded successfully:", response.status_code)
+        with app.app_context():  # Ensure context for Flask features
+            response = requests.post(BACKEND_URL, json=metric)
+            response.raise_for_status()
+            print("Metric uploaded successfully:", response.status_code)
     except requests.exceptions.RequestException as e:
         print("Failed to upload metric, retrying:", e)
         try:

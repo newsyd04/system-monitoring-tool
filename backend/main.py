@@ -1,12 +1,14 @@
+import eventlet
+eventlet.monkey_patch()  # This must be at the very top
+
 import sys
 import logging
 import threading
+import os  # Fix missing import
 from flask_socketio import SocketIO
 from cloud_api.app import app, socketio
 from collector_agent.uploader_queue import enqueue_metrics, upload_metrics, shutdown_flag
 from cloud_api.database import init_db
-import eventlet
-eventlet.monkey_patch()
 
 # Global logging configuration
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s: %(message)s")
