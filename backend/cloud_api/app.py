@@ -10,11 +10,9 @@ app = Flask(__name__)
 CORS(app)
 socketio = SocketIO(app, cors_allowed_origins="*")
 
-
 def get_db_connection():
     """Establish a connection to the PostgreSQL database."""
     return psycopg2.connect(DATABASE_URL)
-
 
 @app.route("/api/devices", methods=["GET"])
 def get_devices():
@@ -34,27 +32,12 @@ def get_devices():
     conn.close()
     return jsonify(devices)
 
-
-@socketio.on('connect')
-def handle_connect():
-    """Handle client connection."""
-    print("Client connected")
-    emit("connected", {"message": "Connected to WebSocket server"})
-
-
-@socketio.on('disconnect')
-def handle_disconnect():
-    """Handle client disconnection."""
-    print("Client disconnected")
-
-
-@socketio.on('request_metrics')
-def handle_request_metrics(data):
-    """Send metrics for a specific device."""
-    device_id = data.get("device_id")
+@app.route("/api/metrics", methods=["GET"])
+def get_metrics():
+    """Fetch the most recent metrics for a specific device."""
+    device_id = request.args.get("device_id")
     if not device_id:
-        emit("error", {"message": "Missing required parameter: device_id"})
-        return
+        return jsonify({"error": "Missing required parameter: device_id"}), 400
 
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -75,13 +58,13 @@ def handle_request_metrics(data):
     conn.close()
 
     metrics = [{"metric_name": row[0], "value": row[1]} for row in rows]
-    emit("metrics_response", {"metrics": metrics})
+    return jsonify(metrics)
 
-
-@socketio.on('save_metric')
-def handle_save_metric(data):
-    """Save metrics and notify clients."""
+@app.route("/api/metrics", methods=["POST"])
+def save_metrics():
+    """Save metrics and emit updates to connected clients."""
     try:
+        data = request.json
         device_id = data["device_id"]
 
         conn = get_db_connection()
@@ -119,12 +102,73 @@ def handle_save_metric(data):
         conn.commit()
         conn.close()
 
-        # Emit the new metric to all connected clients
+        # Notify clients of new metrics
         socketio.emit('new_metric', data)
-        emit("save_success", {"message": "Metrics saved successfully"})
+        return jsonify({"status": "success"}), 200
     except Exception as e:
-        emit("error", {"message": str(e)})
+        return jsonify({"error": str(e)}), 500
 
+@app.route("/api/metrics/history", methods=["GET"])
+def get_metrics_history():
+    """Fetch all metric uploads sorted by upload time for a specific device."""
+    device_id = request.args.get("device_id")
+    if not device_id:
+        return jsonify({"error": "Missing required parameter: device_id"}), 400
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    query = """
+        SELECT ms.client_timestamp_utc,
+               mv.value AS metric_value,
+               dmt.name AS metric_name
+        FROM metric_snapshots ms
+        JOIN metric_values mv ON ms.metric_snapshot_id = mv.metric_snapshot_id
+        JOIN device_metric_types dmt ON mv.device_metric_type_id = dmt.device_metric_type_id
+        WHERE ms.device_id = %s
+        ORDER BY ms.client_timestamp_utc DESC;
+    """
+    cursor.execute(query, (device_id,))
+    rows = cursor.fetchall()
+    conn.close()
+
+    # Transform rows into the desired structure
+    history = {}
+    for row in rows:
+        timestamp, metric_value, metric_name = row
+        if timestamp not in history:
+            history[timestamp] = {
+                "timestamp": timestamp,
+                "cpu_usage": "N/A",
+                "memory_usage": "N/A",
+                "running_threads": "N/A",
+            }
+        history[timestamp][metric_name] = metric_value
+
+    result = list(history.values())
+    return jsonify(result)
+
+@app.route("/api/device/reboot", methods=["POST"])
+def send_test_message():
+    """Send a test message to the ESP32."""
+    device_id = request.json.get("device_id")
+    if not device_id:
+        return jsonify({"error": "Device ID is required"}), 400
+
+    # Emit test_message instead of reboot_command
+    socketio.emit("test_message", {"device_id": device_id})
+    return jsonify({"status": "success", "message": f"Test message sent to device {device_id}"}), 200
+
+@socketio.on('connect')
+def handle_connect():
+    """Handle client connection."""
+    print("Client connected")
+    emit("connected", {"message": "Connected to WebSocket server"})
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    """Handle client disconnection."""
+    print("Client disconnected")
 
 if __name__ == "__main__":
     from database import init_db
