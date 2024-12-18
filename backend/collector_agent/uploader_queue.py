@@ -1,38 +1,55 @@
-
-import sys
-import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from collector import collect_metrics  # Import after updating the path
-
-import threading
 import queue
+import threading
 import time
 import requests
 from collector_agent.collector import collect_metrics
 
-metric_queue = queue.Queue()
+# Create a queue with a maximum size to prevent memory overflow
+metric_queue = queue.Queue(maxsize=100)
+
+# Event flag to signal shutdown
+shutdown_flag = threading.Event()
 
 def enqueue_metrics():
-    while True:
-        metrics = collect_metrics()
-        metric_queue.put(metrics)
+    """Collect metrics and add them to the queue."""
+    while not shutdown_flag.is_set():
+        try:
+            metrics = collect_metrics()
+            metric_queue.put(metrics, timeout=1)  # Block for 1 second if the queue is full
+            print("Enqueued metrics:", metrics)
+        except queue.Full:
+            print("Queue is full, dropping metrics.")
         time.sleep(5)
 
+def upload_metric(metric):
+    """Upload a single metric."""
+    try:
+        response = requests.post("http://localhost:5000/api/metrics", json=metric)
+        response.raise_for_status()
+        print("Metric uploaded successfully:", response.status_code)
+    except requests.exceptions.RequestException as e:
+        print("Failed to upload metric, retrying:", e)
+        try:
+            metric_queue.put(metric, timeout=1)  # Re-enqueue the metric for retry
+        except queue.Full:
+            print("Queue is full, dropping metric.")
+
 def upload_metrics():
-    while True:
-        if not metric_queue.empty():
-            metrics = metric_queue.get()
-            try:
-                print("Uploading metrics:", metrics)  # Debugging
-                response = requests.post("http://localhost:5000/api/metrics", json=metrics)
-                print("Response status:", response.status_code)
-                print("Response text:", response.text)
-            except Exception as e:
-                print("Failed to upload metrics:", e)
+    """Process metrics from the queue and upload them."""
+    while not shutdown_flag.is_set():
+        try:
+            metric = metric_queue.get(timeout=1)  # Block for 1 second if the queue is empty
+            upload_metric(metric)
+            metric_queue.task_done()
+        except queue.Empty:
+            continue  # No metrics to process, continue waiting
 
 if __name__ == "__main__":
-    threading.Thread(target=enqueue_metrics, daemon=True).start()
-    threading.Thread(target=upload_metrics, daemon=True).start()
-    while True:
-        time.sleep(1)  # Keep main thread alive
+    try:
+        threading.Thread(target=enqueue_metrics, daemon=True).start()
+        threading.Thread(target=upload_metrics, daemon=True).start()
+        while not shutdown_flag.is_set():
+            time.sleep(1)  # Keep the main thread alive
+    except KeyboardInterrupt:
+        print("Shutting down gracefully...")
+        shutdown_flag.set()

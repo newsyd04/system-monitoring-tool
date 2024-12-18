@@ -2,7 +2,7 @@ import os
 import psycopg2
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from flask_socketio import SocketIO
+from flask_socketio import SocketIO, emit
 
 DATABASE_URL = "postgresql://metricsdb_yqja_user:entPz514UvRf9JX3KneevRRy2xpktl9v@dpg-ctf0alt2ng1s738fois0-a.oregon-postgres.render.com/metricsdb_yqja"
 
@@ -35,12 +35,26 @@ def get_devices():
     return jsonify(devices)
 
 
-@app.route("/api/metrics", methods=["GET"])
-def get_metrics():
-    """Fetch the most recent metrics for a specific device."""
-    device_id = request.args.get("device_id")
+@socketio.on('connect')
+def handle_connect():
+    """Handle client connection."""
+    print("Client connected")
+    emit("connected", {"message": "Connected to WebSocket server"})
+
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    """Handle client disconnection."""
+    print("Client disconnected")
+
+
+@socketio.on('request_metrics')
+def handle_request_metrics(data):
+    """Send metrics for a specific device."""
+    device_id = data.get("device_id")
     if not device_id:
-        return jsonify({"error": "Missing required parameter: device_id"}), 400
+        emit("error", {"message": "Missing required parameter: device_id"})
+        return
 
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -61,25 +75,17 @@ def get_metrics():
     conn.close()
 
     metrics = [{"metric_name": row[0], "value": row[1]} for row in rows]
-    return jsonify(metrics)
+    emit("metrics_response", {"metrics": metrics})
 
 
-@app.route("/api/metrics", methods=["POST"])
-def save_metrics():
-    """Save metrics and emit updates to connected clients."""
+@socketio.on('save_metric')
+def handle_save_metric(data):
+    """Save metrics and notify clients."""
     try:
-        data = request.json
         device_id = data["device_id"]
 
         conn = get_db_connection()
         cursor = conn.cursor()
-
-        # Ensure the aggregator exists
-        cursor.execute("""
-            INSERT INTO aggregators (aggregator_id, guid, name)
-            VALUES (%s, %s, %s)
-            ON CONFLICT (aggregator_id) DO NOTHING
-        """, (1, "default-guid", "Default Aggregator"))
 
         # Ensure the device exists
         cursor.execute("""
@@ -97,9 +103,6 @@ def save_metrics():
         metric_snapshot_id = cursor.fetchone()[0]
 
         # Insert all metric values dynamically
-        cursor.execute("SELECT * FROM device_metric_types;")
-        print("Device Metric Types in DB:", cursor.fetchall())  # Debugging
-
         metric_types = {
             "cpu_usage": 1,
             "memory_usage": 2,
@@ -116,67 +119,11 @@ def save_metrics():
         conn.commit()
         conn.close()
 
-        # Emit the new metric to connected clients
+        # Emit the new metric to all connected clients
         socketio.emit('new_metric', data)
-        return jsonify({"status": "success"}), 200
-
+        emit("save_success", {"message": "Metrics saved successfully"})
     except Exception as e:
-        print("Error in save_metrics:", str(e))
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/api/metrics/history", methods=["GET"])
-def get_metrics_history():
-    """Fetch all metric uploads sorted by upload time for a specific device."""
-    device_id = request.args.get("device_id")
-    if not device_id:
-        return jsonify({"error": "Missing required parameter: device_id"}), 400
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    # Updated query
-    query = """
-        SELECT ms.client_timestamp_utc,
-               mv.value AS metric_value,
-               dmt.name AS metric_name
-        FROM metric_snapshots ms
-        JOIN metric_values mv ON ms.metric_snapshot_id = mv.metric_snapshot_id
-        JOIN device_metric_types dmt ON mv.device_metric_type_id = dmt.device_metric_type_id
-        WHERE ms.device_id = %s
-        ORDER BY ms.client_timestamp_utc DESC;
-    """
-    cursor.execute(query, (device_id,))
-    rows = cursor.fetchall()
-    conn.close()
-
-    # Transform rows into the desired structure
-    history = {}
-    for row in rows:
-        timestamp, metric_value, metric_name = row
-        if timestamp not in history:
-            history[timestamp] = {
-                "timestamp": timestamp,
-                "cpu_usage": "N/A",
-                "memory_usage": "N/A",
-                "running_threads": "N/A",
-            }
-        history[timestamp][metric_name] = metric_value
-
-    # Convert dict to a list of dictionaries
-    result = list(history.values())
-    return jsonify(result)
-
-
-@app.route("/api/device/reboot", methods=["POST"])
-def send_test_message():
-    """Send a test message to the ESP32."""
-    device_id = request.json.get("device_id")
-    if not device_id:
-        return jsonify({"error": "Device ID is required"}), 400
-
-    # Emit test_message instead of reboot_command
-    socketio.emit("test_message", {"device_id": device_id})
-    return jsonify({"status": "success", "message": f"Test message sent to device {device_id}"}), 200
+        emit("error", {"message": str(e)})
 
 
 if __name__ == "__main__":
