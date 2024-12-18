@@ -16,6 +16,13 @@ def get_db_connection():
     """Establish a connection to the PostgreSQL database."""
     return psycopg2.connect(DATABASE_URL)
 
+@app.route("/api/devices", methods=["GET"])
+def get_devices():
+    session = SessionLocal()
+    devices = session.query(Device).all()
+    session.close()
+    return jsonify([{"device_id": d.device_id, "name": d.name} for d in devices])
+
 @app.route("/api/metrics", methods=["GET"])
 def get_metrics():
     device_id = request.args.get("device_id")
@@ -45,20 +52,6 @@ def get_metrics():
     finally:
         session.close()
 
-@app.route("/api/metrics", methods=["GET"])
-def get_metrics():
-    device_id = request.args.get("device_id")
-    session = SessionLocal()
-    snapshots = (
-        session.query(MetricValue)
-        .join(MetricSnapshot)
-        .join(MetricType)
-        .filter(MetricSnapshot.device_id == device_id)
-    )
-    session.close()
-    return jsonify(
-        [{"metric_name": snapshot.type.name, "value": snapshot.value} for snapshot in snapshots]
-    )
 
 @app.route("/api/metrics", methods=["POST"])
 def save_metrics():
