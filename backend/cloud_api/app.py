@@ -1,8 +1,10 @@
-import os
-import psycopg2
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
+from sqlalchemy.orm import Session
+from sqlalchemy.exc import SQLAlchemyError
+from cloud_api.database import engine, SessionLocal
+from cloud_api.models import Device, MetricType, MetricSnapshot, MetricValue
 
 DATABASE_URL = "postgresql://metricsdb_yqja_user:entPz514UvRf9JX3KneevRRy2xpktl9v@dpg-ctf0alt2ng1s738fois0-a.oregon-postgres.render.com/metricsdb_yqja"
 
@@ -16,109 +18,82 @@ def get_db_connection():
 
 @app.route("/api/devices", methods=["GET"])
 def get_devices():
-    """Fetch all unique devices with their aggregators."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    query = """
-        SELECT d.device_id, d.name, a.name AS aggregator_name
-        FROM devices d
-        LEFT JOIN aggregators a ON d.aggregator_id = a.aggregator_id
-    """
-    cursor.execute(query)
-    devices = [
-        {"device_id": row[0], "name": row[1], "aggregator_name": row[2] or "None"}
-        for row in cursor.fetchall()
-    ]
-    conn.close()
-    return jsonify(devices)
+    session = SessionLocal()
+    devices = session.query(Device).all()
+    session.close()
+    return jsonify([{"device_id": d.device_id, "name": d.name} for d in devices])
 
 @app.route("/api/metrics", methods=["GET"])
 def get_metrics():
-    """Fetch the most recent metrics for a specific device."""
     device_id = request.args.get("device_id")
     if not device_id:
-        return jsonify({"error": "Missing required parameter: device_id"}), 400
+        return jsonify({"error": "Missing required parameter: device_id"}), 400  # Explicit error
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    query = """
-        SELECT dmt.name AS metric_name, mv.value
-        FROM metric_values mv
-        JOIN (
-            SELECT ms.metric_snapshot_id
-            FROM metric_snapshots ms
-            WHERE ms.device_id = %s
-            ORDER BY ms.client_timestamp_utc DESC
-            LIMIT 1
-        ) latest_snapshot ON mv.metric_snapshot_id = latest_snapshot.metric_snapshot_id
-        JOIN device_metric_types dmt ON mv.device_metric_type_id = dmt.device_metric_type_id
-    """
-    cursor.execute(query, (device_id,))
-    rows = cursor.fetchall()
-    conn.close()
+    session = SessionLocal()
+    try:
+        snapshots = (
+            session.query(MetricValue)
+            .join(MetricSnapshot)
+            .join(MetricType)
+            .filter(MetricSnapshot.device_id == device_id)
+        ).all()
 
-    metrics = [{"metric_name": row[0], "value": row[1]} for row in rows]
-    return jsonify(metrics)
+        if not snapshots:  # No data found
+            return jsonify({"error": "No metrics found for the specified device_id"}), 404
+
+        # Process and return the data
+        metrics = [
+            {"metric_name": snapshot.type.name, "value": snapshot.value}
+            for snapshot in snapshots
+        ]
+        return jsonify(metrics), 200
+    except SQLAlchemyError as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        session.close()
+
 
 @app.route("/api/metrics", methods=["POST"])
 def save_metrics():
-    """Save metrics and emit updates to connected clients."""
+    data = request.json
+    session = SessionLocal()
+
     try:
-        data = request.json
+        # Ensure device exists
         device_id = data["device_id"]
+        device = session.query(Device).filter_by(device_id=device_id).first()
+        if not device:
+            device = Device(device_id=device_id, name=device_id, aggregator_id=1)
+            session.add(device)
 
-        conn = get_db_connection()
-        cursor = conn.cursor()
+        # Create snapshot
+        snapshot = MetricSnapshot(device_id=device_id, timestamp=data.get("timestamp"))
+        session.add(snapshot)
+        session.flush()  # Flush to generate snapshot ID
 
-        # Ensure the device exists
-        cursor.execute("""
-            INSERT INTO devices (device_id, aggregator_id, name, ordinal)
-            VALUES (%s, %s, %s, %s)
-            ON CONFLICT (device_id) DO NOTHING
-        """, (device_id, 1, device_id, 0))
-
-        # Insert metric snapshot
-        cursor.execute("""
-            INSERT INTO metric_snapshots (device_id, client_timestamp_utc, client_timezone_mins)
-            VALUES (%s, NOW(), 0)
-            RETURNING metric_snapshot_id
-        """, (device_id,))
-        metric_snapshot_id = cursor.fetchone()[0]
-
-        # Process each metric in the request
+        # Save metrics
         for metric_name, metric_value in data.items():
-            if metric_name in ["device_id", "client_timestamp_utc", "client_timezone_mins"]:
-                continue  # Skip non-metric fields
+            if metric_name == "device_id":
+                continue
+            metric_type = session.query(MetricType).filter_by(name=metric_name).first()
+            if not metric_type:
+                metric_type = MetricType(name=metric_name)
+                session.add(metric_type)
+                session.flush()  # Flush to generate type ID
 
-            # Check if the metric type exists in the database
-            cursor.execute("SELECT device_metric_type_id FROM device_metric_types WHERE name = %s", (metric_name,))
-            result = cursor.fetchone()
+            metric_value = MetricValue(
+                snapshot_id=snapshot.id, type_id=metric_type.id, value=float(metric_value)
+            )
+            session.add(metric_value)
 
-            if not result:
-                # Insert new metric type if it doesn't exist
-                cursor.execute("""
-                    INSERT INTO device_metric_types (name)
-                    VALUES (%s)
-                    RETURNING device_metric_type_id
-                """, (metric_name,))
-                metric_type_id = cursor.fetchone()[0]
-            else:
-                metric_type_id = result[0]
-
-            # Insert the metric value
-            cursor.execute("""
-                INSERT INTO metric_values (metric_snapshot_id, device_metric_type_id, value)
-                VALUES (%s, %s, %s)
-            """, (metric_snapshot_id, metric_type_id, metric_value))
-
-        conn.commit()
-        conn.close()
-
-        # Notify clients of new metrics
-        socketio.emit('new_metric', data)
+        session.commit()
+        socketio.emit("new_metric", data)
         return jsonify({"status": "success"}), 200
-    except Exception as e:
+    except SQLAlchemyError as e:
+        session.rollback()
         return jsonify({"error": str(e)}), 500
+    finally:
+        session.close()
 
 
 @app.route("/api/metrics/history", methods=["GET"])
