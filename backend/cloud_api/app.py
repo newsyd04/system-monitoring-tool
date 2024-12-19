@@ -114,7 +114,7 @@ def save_metrics():
 
 @app.route("/api/metrics/history", methods=["GET"])
 def get_metrics_history():
-    """Fetch all metric uploads sorted by upload time for a specific device."""
+    """Fetch all recorded metrics dynamically for a specific device."""
     device_id = request.args.get("device_id")
     if not device_id:
         return jsonify({"error": "Missing required parameter: device_id"}), 400
@@ -123,32 +123,27 @@ def get_metrics_history():
     cursor = conn.cursor()
 
     query = """
-        SELECT ms.client_timestamp_utc,
-               mv.value AS metric_value,
-               dmt.name AS metric_name
+        SELECT ms.timestamp,
+               dmt.name AS metric_name,
+               mv.value AS metric_value
         FROM metric_snapshots ms
-        JOIN metric_values mv ON ms.metric_snapshot_id = mv.metric_snapshot_id
-        JOIN device_metric_types dmt ON mv.device_metric_type_id = dmt.device_metric_type_id
+        JOIN metric_values mv ON ms.id = mv.snapshot_id
+        JOIN device_metric_types dmt ON mv.type_id = dmt.id
         WHERE ms.device_id = %s
-        ORDER BY ms.client_timestamp_utc DESC;
+        ORDER BY ms.timestamp DESC;
     """
     cursor.execute(query, (device_id,))
     rows = cursor.fetchall()
     conn.close()
 
-    # Transform rows into the desired structure
+    # Transform rows into a dynamic structure
     history = {}
-    for row in rows:
-        timestamp, metric_value, metric_name = row
+    for timestamp, metric_name, metric_value in rows:
         if timestamp not in history:
-            history[timestamp] = {
-                "timestamp": timestamp,
-                "cpu_usage": "N/A",
-                "memory_usage": "N/A",
-                "running_threads": "N/A",
-            }
+            history[timestamp] = {"timestamp": timestamp}
         history[timestamp][metric_name] = metric_value
 
+    # Convert dictionary to a list of records
     result = list(history.values())
     return jsonify(result)
 
