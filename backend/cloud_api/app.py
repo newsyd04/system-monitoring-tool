@@ -66,15 +66,30 @@ def save_metrics():
             device = Device(device_id=device_id, name=device_id, aggregator_id=1)
             session.add(device)
 
+        # Parse and validate the timestamp
+        raw_timestamp = data.get("timestamp")
+        if raw_timestamp:
+            try:
+                timestamp = datetime.fromisoformat(raw_timestamp)
+            except ValueError:
+                return jsonify({"error": "Invalid timestamp format"}), 400
+        else:
+            timestamp = datetime.utcnow()  # Use the current UTC time if no timestamp is provided
+
         # Create snapshot
-        snapshot = MetricSnapshot(device_id=device_id, timestamp=data.get("timestamp"))
+        snapshot = MetricSnapshot(device_id=device_id, timestamp=timestamp)
         session.add(snapshot)
         session.flush()  # Flush to generate snapshot ID
 
-        # Save metrics
+        # Save metrics (excluding device_id and timestamp)
         for metric_name, metric_value in data.items():
-            if metric_name == "device_id":
-                continue
+            if metric_name in {"device_id", "timestamp"}:
+                continue  # Skip non-metric fields
+            try:
+                metric_value = float(metric_value)  # Ensure the metric value is a float
+            except ValueError:
+                return jsonify({"error": f"Invalid value for {metric_name}: {metric_value}"}), 400
+
             metric_type = session.query(MetricType).filter_by(name=metric_name).first()
             if not metric_type:
                 metric_type = MetricType(name=metric_name)
@@ -82,7 +97,7 @@ def save_metrics():
                 session.flush()  # Flush to generate type ID
 
             metric_value = MetricValue(
-                snapshot_id=snapshot.id, type_id=metric_type.id, value=float(metric_value)
+                snapshot_id=snapshot.id, type_id=metric_type.id, value=metric_value
             )
             session.add(metric_value)
 
@@ -94,7 +109,6 @@ def save_metrics():
         return jsonify({"error": str(e)}), 500
     finally:
         session.close()
-
 
 @app.route("/api/metrics/history", methods=["GET"])
 def get_metrics_history():
