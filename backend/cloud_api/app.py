@@ -6,6 +6,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from cloud_api.database import engine, SessionLocal
 from cloud_api.models import Device, MetricType, MetricSnapshot, MetricValue
 from datetime import datetime
+import psycopg2
 
 DATABASE_URL = "postgresql://metricsdb_yqja_user:entPz514UvRf9JX3KneevRRy2xpktl9v@dpg-ctf0alt2ng1s738fois0-a.oregon-postgres.render.com/metricsdb_yqja"
 
